@@ -88,42 +88,74 @@ Path path = new Dijkstra(graph, encoder).calcPath(fromId, toId);
 ### Use CHGraph to make queries faster
 
 ```java
-// Creating and saving the graph
-GraphBuilder gb = new GraphBuilder(em).
-    setLocation("graphhopper_folder").
-    setStore(true).
-    setCHGraph(true);
-GraphHopperStorage graph = gb.create();
-// Create a new edge between two nodes, set access, distance, speed, geometry, ..
-EdgeIteratorState edge = graph.edge(fromId, toId);
-...
+// Create and save the graph for later queries
+FlagEncoder encoder = new CarFlagEncoder();
+EncodingManager em = new EncodingManager(encoder);
 
-// Prepare the graph for fast querying ...
+GraphBuilder gb = new GraphBuilder(em).
+    setLocation(pathToMyGraphhopperOutDirectory).
+    setStore(true).
+    setCHGraph(new FastestWeighting(encoder));
+GraphHopperStorage graph = gb.create();
+
+for (Node node : ALL NODES OF MY NETWORK) {
+    graph.getNodeAccess().setNode(uniqueNodeId, nodeX, nodeY);
+}
+
+for (Link link : ALL LINKS OF MY NETWORK) {
+    EdgeIteratorState edge = graph.edge(fromNodeId, toNodeId);
+    edge.setDistance(linkLength);
+    edge.setFlags(encoder.setProperties(linkSpeedInMeterPerSecond * 3.6, true, false));
+}
+graph.freeze();
+
+Weighting weighting = new FastestWeighting(encoder);
 TraversalMode tMode = TraversalMode.NODE_BASED;
-PrepareContractionHierarchies pch = new PrepareContractionHierarchies(ghStorage, encoder, weighting, tMode);
+PrepareContractionHierarchies pch = new PrepareContractionHierarchies(graph.getDirectory(), graph, graph.getGraph(CHGraph.class), weighting, tMode);
 pch.doWork();
 
-// flush after preparation!
 graph.flush();
 
+LocationIndex index = new LocationIndexTree(graph.getBaseGraph(), graph.getDirectory());
+index.prepareIndex();
+index.flush();
+
+index.close();
+graph.close();
+
+```
+
+```java
 // Load and use the graph
-GraphStorage graph = gb.load();
+FlagEncoder encoder = new CarFlagEncoder();
+EncodingManager em = new EncodingManager(encoder);
+		
+GraphBuilder gb = new GraphBuilder(em).
+ setLocation(pathToMyGraphhopperOutDirectory).
+	setStore(true).
+	setCHGraph(new FastestWeighting(encoder));
+		
+GraphHopperStorage graph = gb.load();
 
- // Load index
-LocationIndex index = new LocationIndexTree(graph.getBaseGraph(), new RAMDirectory("graphhopper_folder", true));
+// Load the index
+LocationIndex index = new LocationIndexTree(graph.getBaseGraph(), graph.getDirectory());
 if (!index.loadExisting())
-    throw new IllegalStateException("location index cannot be loaded!");
-
-// calculate path is identical
-QueryResult fromQR = index.findClosest(latitudeFrom, longituteFrom, EdgeFilter.ALL_EDGES);
-QueryResult toQR = index.findClosest(latitudeTo, longituteTo, EdgeFilter.ALL_EDGES);
-QueryGraph queryGraph = new QueryGraph(graph);
-queryGraph.lookup(fromQR, toQR);
-
-// create the algorithm using the PrepareContractionHierarchies object
+ throw new IllegalStateException("location index cannot be loaded!");
+	
+// Create the algorithm using the PrepareContractionHierarchies object
 AlgorithmOptions algoOpts = AlgorithmOptions.start().
-   algorithm(Parameters.Algorithms.DIJKSTRA_BI).traversalMode(tMode).weighting(weighting).
-   build();
+	algorithm(Parameters.Algorithms.ASTAR_BI).traversalMode(TraversalMode.NODE_BASED).weighting(new FastestWeighting(encoder)).
+ build();
+		
+PrepareContractionHierarchies pch = new PrepareContractionHierarchies(graph.getDirectory(), graph, graph.getGraph(CHGraphImpl.class), new FastestWeighting(encoder), TraversalMode.NODE_BASED);
+	
+QueryResult fromQR = index.findClosest(fromCoordinate.x, fromCoordinate.y, EdgeFilter.ALL_EDGES);
+QueryResult toQR = index.findClosest(toCoordinate.x, toCoordinate.y, EdgeFilter.ALL_EDGES);
+QueryGraph queryGraph = new QueryGraph(graph.getGraph(CHGraphImpl.class));
+queryGraph.lookup(fromQR, toQR);
+		
 RoutingAlgorithm algorithm = pch.createAlgo(queryGraph, algoOpts);
+	
 Path path = algorithm.calcPath(fromQR.getClosestNode(), toQR.getClosestNode());
+// do something with the path
 ```
